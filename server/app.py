@@ -1,226 +1,185 @@
 import time
 from collections import deque
-
 import streamlit as st
 import cv2
 import mediapipe as mp
 import numpy as np
-
-# Adjust imports based on your actual file structure
 from detection import DrowsinessDetector
 from distraction_model import load_distraction_models, predict_driver_behavior
+from heart_monitoring import load_heart_model, predict_heart_condition, generate_demo_heart_data, calculate_bpm, generate_ecg_point
 
-# ============ HELPER FUNCTIONS ============
-def clamp(val, min_val=0.0, max_val=1.0):
-    """Prevents Streamlit progress bars from crashing if values exceed 1.0"""
-    return max(min_val, min(val, max_val))
+st.set_page_config(page_title="Driver Safety Monitor", page_icon="🚗", layout="wide", initial_sidebar_state="expanded")
 
-# ============ STREAMLIT PAGE CONFIG ============
-st.set_page_config(
-    page_title="Driver Safety Monitor",
-    page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for sleek styling and animations
 st.markdown("""
     <style>
-    .alert-drowsiness {
-        background-color: #ff4b4b;
-        color: white;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 5px solid #c92a2a;
-        font-size: 1.2rem;
-        font-weight: bold;
-        animation: pulse 1s infinite;
-        margin-bottom: 1rem;
-    }
-    .alert-warning {
-        background-color: #ffa94d;
-        color: white;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 5px solid #d67706;
-        font-size: 1.2rem;
-        font-weight: bold;
-        animation: pulse 1s infinite;
-        margin-bottom: 1rem;
-    }
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
-    }
-    /* Make the video frame look like a monitor */
-    .video-container {
-        border: 4px solid #333;
-        border-radius: 10px;
-        overflow: hidden;
-    }
+    .alert-drowsiness { background-color: #ff4b4b; color: white; padding: 1rem; border-radius: 0.5rem; border-left: 5px solid #c92a2a; font-size: 1.2rem; font-weight: bold; animation: pulse 1s infinite; margin-bottom: 1rem; }
+    .alert-warning { background-color: #ffa94d; color: white; padding: 1rem; border-radius: 0.5rem; border-left: 5px solid #d67706; font-size: 1.2rem; font-weight: bold; animation: pulse 1s infinite; margin-bottom: 1rem; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .video-container { border: 4px solid #333; border-radius: 10px; overflow: hidden; }
     </style>
 """, unsafe_allow_html=True)
 
-# ============ SIDEBAR CONTROLS ============
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2000/2000621.png", width=80)
     st.header("⚙️ System Controls")
-    
     run = st.toggle("📹 Start Camera", value=False)
-    mode = st.radio("Detection Mode", ["Drowsiness", "Distraction"], index=0)
-
+    mode = st.radio("Detection Mode", ["Drowsiness", "Distraction", "Heart Health"], index=0)
     st.divider()
-    
-    st.subheader("📊 Sensitivity Thresholds")
-    ear_thresh = st.slider("Eye Closure (EAR)", min_value=0.10, max_value=0.30, value=0.15, step=0.01)
-    mar_thresh = st.slider("Yawn (MAR)", min_value=0.30, max_value=0.80, value=0.50, step=0.01)
-    nod_thresh = st.slider("Head Nod Ratio", min_value=0.30, max_value=0.60, value=0.45, step=0.01)
-    
-    st.divider()
-    st.caption("Final Year Project - Driver Safety System")
+    ear_thresh = st.slider("Eye Closure (EAR)", 0.10, 0.30, 0.15, 0.01)
+    mar_thresh = st.slider("Yawn (MAR)", 0.30, 0.80, 0.50, 0.01)
+    nod_thresh = st.slider("Head Nod Ratio", 0.30, 0.60, 0.45, 0.01)
 
-# ============ MAIN LAYOUT ============
 st.title("🚗 Real-Time Driver Safety Monitor")
-st.markdown("Monitor driver fatigue and behavioral distractions using Computer Vision and Deep Learning.")
-
-# Main two-column layout (Slightly adjusted ratio for better video sizing)
 col_camera, col_stats = st.columns([6, 4], gap="large")
 
 with col_camera:
-    st.markdown('<div class="video-container">', unsafe_allow_html=True)
-    frame_window = st.image([])
-    st.markdown('</div>', unsafe_allow_html=True)
+    frame_window = st.empty()
 
-# Create persistent containers for stats to prevent UI jumping
 with col_stats:
     alerts_placeholder = st.empty()
-    st.divider()
     metrics_placeholder = st.empty()
 
-# ============ MODEL SETUP ============
 @st.cache_resource
-def init_mediapipe():
-    mp_face = mp.solutions.face_mesh
-    return mp_face.FaceMesh(max_num_faces=1, refine_landmarks=True, 
-                            min_detection_confidence=0.5, min_tracking_confidence=0.5)
+def get_models():
+    return mp.solutions.face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True), DrowsinessDetector(), load_distraction_models(), load_heart_model()
 
-@st.cache_resource
-def get_distraction_models():
-    return load_distraction_models()
-
-face_mesh = init_mediapipe()
-detector = DrowsinessDetector()
-models = get_distraction_models()
-
+face_mesh, detector, distraction_models, heart_model = get_models()
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
 
-# ============ STATE MANAGEMENT ============
 if "alert_state" not in st.session_state:
     st.session_state.alert_state = {"text": "", "type": "success", "expires": 0}
 
-def get_active_alert():
-    now = time.time()
-    if st.session_state.alert_state.get("expires", 0) > now and st.session_state.alert_state.get("text"):
-        return st.session_state.alert_state
-    return {"text": "", "type": "success", "expires": 0}
+if "ecg_buffer" not in st.session_state:
+    st.session_state.ecg_buffer = deque([0.0] * 100, maxlen=100)
+    st.session_state.ecg_step = 0.0
+
+if "heart_display_class" not in st.session_state:
+    st.session_state.heart_display_class = "NORMAL"
+    st.session_state.heart_candidate_class = "NORMAL"
+    st.session_state.heart_candidate_count = 0
 
 def set_alert(text, alert_type, duration=4):
-    st.session_state.alert_state.update({
-        "text": text,
-        "type": alert_type,
-        "expires": time.time() + duration
-    })
+    st.session_state.alert_state.update({"text": text, "type": alert_type, "expires": time.time() + duration})
 
-# ============ CAMERA STREAM ============
 if run:
     cap = cv2.VideoCapture(0)
+    heart_prediction, demo_rr = None, None
+    last_update = 0.0
+    last_analysis = 0.0
+    bpm = 75 # Initialize with normal BPM
     
-    if not cap.isOpened():
-        st.error("❌ Camera not detected. Please check your connection.")
-    else:
-        last_update = 0.0
-        frame_times = deque(maxlen=30)
-        latest_fps = 0.0
+    while run:
+        ret, frame = cap.read()
+        if not ret: break
+        frame = cv2.resize(frame, (640, 480))
+        
+        now = time.time()
+        
+        if mode == "Drowsiness":
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_mesh.process(rgb)
+            if results.multi_face_landmarks:
+                for lm in results.multi_face_landmarks:
+                    res = detector.detect(lm, frame.shape)
+                    if res["drowsiness_alert"]: set_alert("🚨 DROWSINESS DETECTED", "error")
+                    elif res["nod_alert"]: set_alert("⚠️ HEAD NODDING", "warning")
+        elif mode == "Distraction":
+            frame, metrics_output, behavior_label = predict_driver_behavior(frame, distraction_models, face_cascade, eye_cascade)
+            if "DISTRACTED" in behavior_label: set_alert("⚠️ DISTRACTED", "warning")
+        elif mode == "Heart Health":
+            # Periodic Heart Risk Analysis (every 0.8s to avoid flickering and heavy computation)
+            if now - last_analysis >= 0.8:
+                last_analysis = now
+                demo_rr = generate_demo_heart_data()
+                raw_prediction = predict_heart_condition(heart_model, demo_rr)
+                raw_class = raw_prediction["class"]
 
-        while run:
-            ret, frame = cap.read()
-            if not ret:
-                st.error("❌ Failed to read from camera")
-                break
-
-            frame = cv2.resize(frame, (640, 480))
-            frame_times.append(time.time())
-            if len(frame_times) >= 2:
-                latest_fps = len(frame_times) / (frame_times[-1] - frame_times[0])
-
-            # ================= REAL-TIME PROCESSING =================
-            if mode == "Drowsiness":
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(rgb)
-
-                if results.multi_face_landmarks:
-                    for face_landmarks in results.multi_face_landmarks:
-                        # NOTE: You can pass ear_thresh, mar_thresh here if you update detector.py!
-                        detection_results = detector.detect(face_landmarks, frame.shape)
-                        
-                        if detection_results["drowsiness_alert"]:
-                            set_alert("🚨 DROWSINESS DETECTED: WAKE UP!", "error")
-                        elif detection_results["nod_alert"]:
-                            set_alert("⚠️ HEAD NODDING DETECTED", "warning")
-                        elif detection_results["yawn_alert"]:
-                            set_alert("🥱 FREQUENT YAWNING", "warning")
-
-            elif mode == "Distraction":
-                frame, metrics_output, behavior_label = predict_driver_behavior(
-                    frame, models, face_cascade, eye_cascade
-                )
-                if "DISTRACTED" in behavior_label:
-                    set_alert(f"⚠️ DISTRACTED: {behavior_label}", "warning")
-
-            # ================= UI UPDATE (THROTTLED TO 10 FPS) =================
-            now = time.time()
-            if now - last_update >= 0.1:  # Faster UI refresh for smoother experience
-                last_update = now
-
-                # 1. Update Alerts
-                with alerts_placeholder.container():
-                    active_alert = get_active_alert()
-                    if active_alert["text"]:
-                        css_class = "alert-drowsiness" if active_alert["type"] == "error" else "alert-warning"
-                        st.markdown(f'<div class="{css_class}">{active_alert["text"]}</div>', unsafe_allow_html=True)
+                # Debounce class transitions so one noisy prediction does not
+                # immediately flip the UI state.
+                if raw_class == st.session_state.heart_display_class:
+                    st.session_state.heart_candidate_class = raw_class
+                    st.session_state.heart_candidate_count = 0
+                else:
+                    if raw_class == st.session_state.heart_candidate_class:
+                        st.session_state.heart_candidate_count += 1
                     else:
-                        st.info("✅ Driver is alert and focused.")
+                        st.session_state.heart_candidate_class = raw_class
+                        st.session_state.heart_candidate_count = 1
 
-                # 2. Update Metrics
-                with metrics_placeholder.container():
-                    st.subheader(f"📈 {mode} Metrics")
+                    required_count = 2 if raw_class == "WARNING" else 3 if raw_class == "EMERGENCY" else 1
+                    if st.session_state.heart_candidate_count >= required_count:
+                        st.session_state.heart_display_class = raw_class
+                        st.session_state.heart_candidate_count = 0
+
+                heart_prediction = dict(raw_prediction)
+                heart_prediction["class"] = st.session_state.heart_display_class
+                bpm = calculate_bpm(demo_rr)
+                
+                if heart_prediction['trigger_sos']: set_alert("🚨 MEDICAL EMERGENCY", "error")
+                elif heart_prediction['class'] == 'WARNING': set_alert("⚠️ HEART WARNING", "warning")
+            
+            # Continuous smooth ECG streaming (independent of analysis rate)
+            # Advance step based on BPM (faster BPM = faster cycle)
+            st.session_state.ecg_step = (st.session_state.ecg_step + (bpm / 1200.0)) % 1.0 # Slower scroll
+            new_point = generate_ecg_point(bpm, st.session_state.ecg_step)
+            st.session_state.ecg_buffer.append(new_point)
+
+        # UI Refresh Throttled
+        if now - last_update >= 0.1: # 10 FPS UI is smoother but not too heavy
+            last_update = now
+            with alerts_placeholder.container():
+                a = st.session_state.alert_state
+                if a["expires"] > now: 
+                    st.markdown(f'<div class="alert-{"drowsiness" if a["type"]=="error" else "warning"}">{a["text"]}</div>', unsafe_allow_html=True)
+                else: 
+                    st.info("✅ Driver Safety System Active")
+            
+            with metrics_placeholder.container():
+                if mode == "Heart Health" and heart_prediction:
+                    # Professional Heart Monitor UI
+                    m1, m2 = st.columns(2)
+                    m1.metric("Heart Rate", f"{int(bpm)} BPM", delta="Normal" if heart_prediction['class'] == 'NORMAL' else "Abnormal", delta_color="inverse")
+                    m2.metric("Condition", heart_prediction['class'])
                     
-                    if mode == "Drowsiness" and 'detection_results' in locals():
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("FPS", f"{latest_fps:.1f}")
-                        c2.metric("EAR (Eye)", f"{detection_results['ear']:.3f}", 
-                                  delta="Low" if detection_results['ear'] < ear_thresh else "Normal", delta_color="inverse")
-                        c3.metric("MAR (Mouth)", f"{detection_results['mar']:.3f}")
+                    st.markdown("### Real-Time ECG (Vital Signs)")
+                    st.line_chart(list(st.session_state.ecg_buffer), height=200, use_container_width=True)
+                    
+                    st.markdown("### Risk Analysis")
+                    st.bar_chart(heart_prediction['probabilities'])
+                
+                elif mode == "Drowsiness":
+                    st.subheader("📊 Drowsiness Monitoring")
+                    if results.multi_face_landmarks:
+                        # Display drowsiness metrics
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("EAR (Eye Aspect Ratio)", f"{res['ear']:.3f}")
+                        m2.metric("MAR (Mouth Aspect Ratio)", f"{res['mar']:.3f}")
+                        m3.metric("Nod Ratio", f"{res['nod_ratio']:.3f}")
                         
-                        st.progress(clamp(detection_results['ear'] / 0.4), text="Eye Openness (EAR)")
-                        st.progress(clamp(detection_results['mar']), text="Mouth Openness (MAR)")
-                        
-                        col_yawn, col_nod = st.columns(2)
-                        col_yawn.metric("Yawn Count", detection_results['yawn_count'])
-                        col_nod.metric("Nod Ratio", f"{detection_results['nod_ratio']:.3f}")
+                        # Additional info
+                        st.write(f"Yawn Count: {res['yawn_count']}")
+                        if res['drowsiness_alert']:
+                            st.error("🚨 Drowsiness Alert Active")
+                        if res['yawn_alert']:
+                            st.warning("😴 Yawning Detected")
+                        if res['nod_alert']:
+                            st.warning("😪 Head Nodding Detected")
+                    else:
+                        st.warning("No face detected")
+                
+                elif mode == "Distraction":
+                    st.subheader("📊 Distraction Monitoring")
+                    # Display distraction metrics if available
+                    if 'metrics_output' in locals():
+                        st.text(metrics_output)
+                    else:
+                        st.write("Processing frame...")
+                
 
-                    elif mode == "Distraction" and 'behavior_label' in locals():
-                        c1, c2 = st.columns(2)
-                        c1.metric("FPS", f"{latest_fps:.1f}")
-                        c2.metric("Current State", behavior_label.replace("(DISTRACTED)", "").strip())
-                        
-                        st.markdown("**Raw Output Data:**")
-                        st.code(metrics_output, language="text")
+                    
+        frame_window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-            # Update video frame continuously
-            frame_window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-
-        cap.release()
+    cap.release()
 else:
-    st.info("👈 Please start the camera from the sidebar to begin monitoring.")
+    st.info("👈 Start camera.")
