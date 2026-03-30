@@ -12,10 +12,89 @@ st.set_page_config(page_title="Driver Safety Monitor", page_icon="🚗", layout=
 
 st.markdown("""
     <style>
-    .alert-drowsiness { background-color: #ff4b4b; color: white; padding: 1rem; border-radius: 0.5rem; border-left: 5px solid #c92a2a; font-size: 1.2rem; font-weight: bold; animation: pulse 1s infinite; margin-bottom: 1rem; }
-    .alert-warning { background-color: #ffa94d; color: white; padding: 1rem; border-radius: 0.5rem; border-left: 5px solid #d67706; font-size: 1.2rem; font-weight: bold; animation: pulse 1s infinite; margin-bottom: 1rem; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-    .video-container { border: 4px solid #333; border-radius: 10px; overflow: hidden; }
+    .alert-drowsiness { 
+        background-color: #ff4b4b; 
+        color: white; 
+        padding: 1rem; 
+        border-radius: 0.5rem; 
+        border-left: 5px solid #c92a2a; 
+        font-size: 1.2rem; 
+        font-weight: bold; 
+        animation: pulse 1s infinite; 
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .alert-warning { 
+        background-color: #ffa94d; 
+        color: white; 
+        padding: 1rem; 
+        border-radius: 0.5rem; 
+        border-left: 5px solid #d67706; 
+        font-size: 1.2rem; 
+        font-weight: bold; 
+        animation: pulse 1s infinite; 
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .alert-info {
+        background-color: #4CAF50; 
+        color: white; 
+        padding: 1rem; 
+        border-radius: 0.5rem; 
+        border-left: 5px solid #2E7D32; 
+        font-size: 1.1rem; 
+        font-weight: 500; 
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    @keyframes pulse { 
+        0%, 100% { opacity: 1; } 
+        50% { opacity: 0.7; } 
+    }
+    .metric-container {
+        background-color: #f8f9fa;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 0.5rem 0;
+        border-left: 4px solid #e0e0e0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .metric-value {
+        font-size: 1.8rem;
+        font-weight: bold;
+        margin: 0.2rem 0;
+    }
+    .metric-label {
+        font-size: 0.9rem;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .status-normal { border-left-color: #4CAF50; }
+    .status-warning { border-left-color: #FF9800; }
+    .status-error { border-left-color: #F44336; }
+    .video-container { 
+        border: 4px solid #333; 
+        border-radius: 10px; 
+        overflow: hidden; 
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #f0f2f6;
+        border-radius: 4px 4px 0 0;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #4CAF50;
+        color: white;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -23,13 +102,15 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2000/2000621.png", width=80)
     st.header("⚙️ System Controls")
     run = st.toggle("📹 Start Camera", value=False)
-    mode = st.radio("Detection Mode", ["Drowsiness", "Distraction", "Heart Health"], index=0)
+    mode = st.radio("Detection Mode", ["Drowsiness", "Distraction", "Heart Health"], index=0, horizontal=True)
     st.divider()
-    ear_thresh = st.slider("Eye Closure (EAR)", 0.10, 0.30, 0.15, 0.01)
-    mar_thresh = st.slider("Yawn (MAR)", 0.30, 0.80, 0.50, 0.01)
-    nod_thresh = st.slider("Head Nod Ratio", 0.30, 0.60, 0.45, 0.01)
+    # Threshold sliders (only applicable to Drowsiness mode)
+    ear_thresh = st.slider("Eye Closure (EAR)", 0.10, 0.30, 0.15, 0.01, help="Eye Aspect Ratio threshold for drowsiness detection")
+    mar_thresh = st.slider("Yawn (MAR)", 0.30, 0.80, 0.50, 0.01, help="Mouth Aspect Ratio threshold for yawning detection")
+    nod_thresh = st.slider("Head Nod Ratio", 0.30, 0.60, 0.45, 0.01, help="Head nod ratio threshold for drowsiness detection")
 
-st.title("🚗 Real-Time Driver Safety Monitor")
+st.markdown("# 🚗 Real-Time Driver Safety Monitor")
+st.markdown("*Advanced AI-powered monitoring for drowsiness, distraction, and heart health*")
 col_camera, col_stats = st.columns([6, 4], gap="large")
 
 with col_camera:
@@ -131,16 +212,42 @@ if run:
             with alerts_placeholder.container():
                 a = st.session_state.alert_state
                 if a["expires"] > now: 
-                    st.markdown(f'<div class="alert-{"drowsiness" if a["type"]=="error" else "warning"}">{a["text"]}</div>', unsafe_allow_html=True)
+                    alert_class = "alert-drowsiness" if a["type"] == "error" else "alert-warning"
+                    st.markdown(f'<div class="{alert_class}">{a["text"]}</div>', unsafe_allow_html=True)
                 else: 
-                    st.info("✅ Driver Safety System Active")
+                    st.markdown('<div class="alert-info">✅ Driver Safety System Active</div>', unsafe_allow_html=True)
             
             with metrics_placeholder.container():
                 if mode == "Heart Health" and heart_prediction:
-                    # Professional Heart Monitor UI
-                    m1, m2 = st.columns(2)
-                    m1.metric("Heart Rate", f"{int(bpm)} BPM", delta="Normal" if heart_prediction['class'] == 'NORMAL' else "Abnormal", delta_color="inverse")
-                    m2.metric("Condition", heart_prediction['class'])
+                    # Determine status colors
+                    status_class = ""
+                    status_color = ""
+                    if heart_prediction['class'] == 'NORMAL':
+                        status_class = "status-normal"
+                        status_color = "#4CAF50"
+                    elif heart_prediction['class'] == 'WARNING':
+                        status_class = "status-warning"
+                        status_color = "#FF9800"
+                    else:  # EMERGENCY
+                        status_class = "status-error"
+                        status_color = "#F44336"
+                    
+                    # Heart Rate and Condition in styled containers
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown(f'''
+                        <div class="metric-container {status_class}">
+                            <div class="metric-label">Heart Rate</div>
+                            <div class="metric-value" style="color: {status_color};">{int(bpm)} BPM</div>
+                        </div>
+                        ''', unsafe_allow_html=True)
+                    with col2:
+                        st.markdown(f'''
+                        <div class="metric-container {status_class}">
+                            <div class="metric-label">Condition</div>
+                            <div class="metric-value" style="color: {status_color};">{heart_prediction['class']}</div>
+                        </div>
+                        ''', unsafe_allow_html=True)
                     
                     st.markdown("### Real-Time ECG (Vital Signs)")
                     st.line_chart(list(st.session_state.ecg_buffer), height=200, use_container_width=True)
@@ -151,30 +258,98 @@ if run:
                 elif mode == "Drowsiness":
                     st.subheader("📊 Drowsiness Monitoring")
                     if results.multi_face_landmarks:
-                        # Display drowsiness metrics
-                        m1, m2, m3 = st.columns(3)
-                        m1.metric("EAR (Eye Aspect Ratio)", f"{res['ear']:.3f}")
-                        m2.metric("MAR (Mouth Aspect Ratio)", f"{res['mar']:.3f}")
-                        m3.metric("Nod Ratio", f"{res['nod_ratio']:.3f}")
+                        # Display drowsiness metrics with visual indicators
+                        col1, col2, col3 = st.columns(3)
                         
-                        # Additional info
-                        st.write(f"Yawn Count: {res['yawn_count']}")
-                        if res['drowsiness_alert']:
-                            st.error("🚨 Drowsiness Alert Active")
-                        if res['yawn_alert']:
-                            st.warning("😴 Yawning Detected")
-                        if res['nod_alert']:
-                            st.warning("😪 Head Nodding Detected")
+                        # EAR Metric
+                        ear_status = "status-error" if res["ear"] < ear_thresh else "status-normal"
+                        ear_color = "#F44336" if res["ear"] < ear_thresh else "#4CAF50"
+                        with col1:
+                            st.markdown(f'''
+                            <div class="metric-container {ear_status}">
+                                <div class="metric-label">EAR (Eye Aspect Ratio)</div>
+                                <div class="metric-value" style="color: {ear_color};">{res['ear']:.3f}</div>
+                                <div style="font-size: 0.8rem; color: #666;">Threshold: {ear_thresh}</div>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                        
+                        # MAR Metric
+                        mar_status = "status-warning" if res["mar"] > mar_thresh else "status-normal"
+                        mar_color = "#FF9800" if res["mar"] > mar_thresh else "#4CAF50"
+                        with col2:
+                            st.markdown(f'''
+                            <div class="metric-container {mar_status}">
+                                <div class="metric-label">MAR (Mouth Aspect Ratio)</div>
+                                <div class="metric-value" style="color: {mar_color};">{res['mar']:.3f}</div>
+                                <div style="font-size: 0.8rem; color: #666;">Threshold: {mar_thresh}</div>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                        
+                        # Nod Ratio Metric
+                        nod_status = "status-warning" if res["nod_ratio"] > nod_thresh else "status-normal"
+                        nod_color = "#FF9800" if res["nod_ratio"] > nod_thresh else "#4CAF50"
+                        with col3:
+                            st.markdown(f'''
+                            <div class="metric-container {nod_status}">
+                                <div class="metric-label">Head Nod Ratio</div>
+                                <div class="metric-value" style="color: {nod_color};">{res['nod_ratio']:.3f}</div>
+                                <div style="font-size: 0.8rem; color: #666;">Threshold: {nod_thresh}</div>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                        
+                        # Additional info with better styling
+                        if res['yawn_count'] > 0:
+                            st.markdown(f'''
+                            <div class="metric-container">
+                                <div class="metric-label">Yawn Count</div>
+                                <div class="metric-value" style="color: #FF9800;">{res['yawn_count']}</div>
+                            </div>
+                            ''', unsafe_allow_html=True)
+                        
+                        # Status indicators
+                        status_col1, status_col2, status_col3 = st.columns(3)
+                        with status_col1:
+                            if res['drowsiness_alert']:
+                                st.markdown('<div class="alert-drowsiness">🚨 DROWSINESS ALERT</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown('<div class="alert-info">✅ Normal Blinking</div>', unsafe_allow_html=True)
+                        with status_col2:
+                            if res['yawn_alert']:
+                                st.markdown('<div class="alert-warning">😴 YAWNING DETECTED</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown('<div class="alert-info">✅ No Yawning</div>', unsafe_allow_html=True)
+                        with status_col3:
+                            if res['nod_alert']:
+                                st.markdown('<div class="alert-warning">😪 HEAD NODDING</div>', unsafe_allow_html=True)
+                            else:
+                                st.markdown('<div class="alert-info">✅ Stable Head Position</div>', unsafe_allow_html=True)
                     else:
-                        st.warning("No face detected")
+                        st.markdown('<div class="alert-warning">⚠️ No face detected - Please ensure camera is visible</div>', unsafe_allow_html=True)
                 
                 elif mode == "Distraction":
                     st.subheader("📊 Distraction Monitoring")
-                    # Display distraction metrics if available
-                    if 'metrics_output' in locals():
+                    # Display distraction metrics with visual feedback
+                    if 'metrics_output' in locals() and metrics_output:
+                        # Parse and display metrics in a more visual way
+                        st.markdown(f'''
+                        <div class="metric-container">
+                            <div class="metric-label">Distraction Status</div>
+                            <div class="metric-value" style="color: #FF9800; font-weight: bold;">
+                                DETECTED
+                            </div>
+                        </div>
+                        ''', unsafe_allow_html=True)
                         st.text(metrics_output)
                     else:
-                        st.write("Processing frame...")
+                        st.markdown(f'''
+                        <div class="metric-container status-normal">
+                            <div class="metric-label">Attention Status</div>
+                            <div class="metric-value" style="color: #4CAF50; font-weight: bold;">
+                                FOCUSED
+                            </div>
+                        </div>
+                        ''', unsafe_allow_html=True)
+                        st.write("Analyzing driver attention...")
                 
 
                     
